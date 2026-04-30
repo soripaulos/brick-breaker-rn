@@ -23,9 +23,6 @@
       },
       "package": "com.soripaulos.brickbreaker"
     },
-    "scheme": "brickbreaker",
-    "plugins": [
-      "expo-router"
-    ]
+    "scheme": "brickbreaker"
   }
 }

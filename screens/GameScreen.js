@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, Dimensions, Text, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Dimensions, Text, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import {
   CANVAS_W, CANVAS_H, PADDLE_W, PADDLE_H, PADDLE_Y, PADDLE_SPEED,
@@ -7,15 +7,12 @@ import {
   BRICK_COLORS, LEVELS,
 } from '../constants/game';
 
-const { width: SCREEN_W } = Dimensions.get('window');
-
 // ─── Brick ───────────────────────────────────────────────────────────────────
-function Brick({ x, y, color }) {
+function Brick({ x, y }) {
   return (
     <View style={[styles.brick, { left: x, top: y }]}>
       <View style={[styles.mortarH, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
       <View style={[styles.mortarV1, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-      <View style={[styles.mortarV2, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
       <View style={styles.brickHighlight} />
     </View>
   );
@@ -65,6 +62,10 @@ export default function GameScreen() {
   const scoreRef = useRef(0);
   const livesRef = useRef(3);
 
+  // Left/right key state for physical keyboard
+  const keysRef = useRef({ left: false, right: false });
+  const keyIntervalRef = useRef(null);
+
   const buildBricks = useCallback((lvlIdx) => {
     const layout = LEVELS[lvlIdx % LEVELS.length];
     const built = [];
@@ -97,7 +98,6 @@ export default function GameScreen() {
     livesRef.current = 3;
     bricksRef.current = buildBricks(0);
     paddleXRef.current = CANVAS_W / 2 - PADDLE_W / 2;
-
     setLevel(1);
     setScore(0);
     setLives(3);
@@ -119,6 +119,41 @@ export default function GameScreen() {
     runningRef.current = true;
     setGameState('playing');
   }, [buildBricks, resetBall]);
+
+  // ─── Keyboard handling (for physical keyboard) ────────────────────────────────
+  useEffect(() => {
+    const down = (e) => {
+      if (gameState !== 'playing') return;
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keysRef.current.left = true;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keysRef.current.right = true;
+    };
+    const up = (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') keysRef.current.left = false;
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') keysRef.current.right = false;
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, [gameState]);
+
+  // Keyboard polling loop
+  useEffect(() => {
+    keyIntervalRef.current = setInterval(() => {
+      if (gameState !== 'playing') return;
+      if (keysRef.current.left) {
+        paddleXRef.current = Math.max(0, paddleXRef.current - PADDLE_SPEED);
+        setPaddleX(paddleXRef.current);
+      }
+      if (keysRef.current.right) {
+        paddleXRef.current = Math.min(CANVAS_W - PADDLE_W, paddleXRef.current + PADDLE_SPEED);
+        setPaddleX(paddleXRef.current);
+      }
+    }, 16);
+    return () => clearInterval(keyIntervalRef.current);
+  }, [gameState]);
 
   // ─── Game loop ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -193,7 +228,7 @@ export default function GameScreen() {
 
       if (hit) {
         setBricks([...bricksRef.current]);
-        const allDead = bricksRef.current.every(b => !b.alive);
+        const allDead = bricksRef.current.every(br => !br.alive);
         if (allDead) {
           runningRef.current = false;
           if (levelRef.current >= 3) {
@@ -205,10 +240,7 @@ export default function GameScreen() {
         }
       }
 
-      // Update UI state (ball position, paddle)
       setBallPos({ x: b.x, y: b.y });
-      setPaddleX(paddleXRef.current);
-
       animRef.current = requestAnimationFrame(loop);
     };
 
@@ -231,82 +263,58 @@ export default function GameScreen() {
     setPaddleX(paddleXRef.current);
   }, [gameState]);
 
-  const handleMouseMove = useCallback((evt) => {
-    if (gameState !== 'playing') return;
-    const x = evt.nativeEvent.locationX;
-    const newX = x - PADDLE_W / 2;
-    paddleXRef.current = Math.max(0, Math.min(CANVAS_W - PADDLE_W, newX));
-    setPaddleX(paddleXRef.current);
-  }, [gameState]);
-
-  // ─── Keyboard handling ──────────────────────────────────────────────────────
-  useEffect(() => {
-    const downHandler = (e) => {
-      if (gameState !== 'playing') return;
-      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
-        paddleXRef.current = Math.max(0, paddleXRef.current - PADDLE_SPEED);
-        setPaddleX(paddleXRef.current);
-      }
-      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
-        paddleXRef.current = Math.min(CANVAS_W - PADDLE_W, paddleXRef.current + PADDLE_SPEED);
-        setPaddleX(paddleXRef.current);
-      }
-    };
-    window.addEventListener('keydown', downHandler);
-    return () => window.removeEventListener('keydown', downHandler);
-  }, [gameState]);
-
   // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <View
-        style={[styles.gameArea, { width: CANVAS_W, height: CANVAS_H }]}
-        onTouchMove={handleTouch}
-        onTouchStart={handleTouch}
-        onMouseMove={handleMouseMove}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.kav}
       >
-        {/* Background */}
-        <View style={styles.gameBg} />
-
-        {/* HUD */}
-        <HUD lives={lives} score={score} level={level} />
-
-        {/* Bricks */}
-        {bricks.map((br) =>
-          br.alive ? <Brick key={br.id} x={br.x} y={br.y} color={br.color} /> : null
-        )}
-
-        {/* Paddle */}
-        <View style={[styles.paddle, { left: paddleX, top: PADDLE_Y }]}>
-          <View style={styles.paddleShine} />
-        </View>
-
-        {/* Ball */}
         <View
-          style={[
-            styles.ball,
-            {
-              left: ballPos.x - BALL_R,
-              top: ballPos.y - BALL_R,
-            },
-          ]}
-        />
+          style={[styles.gameArea, { width: CANVAS_W, height: CANVAS_H }]}
+          onTouchMove={handleTouch}
+          onTouchStart={handleTouch}
+        >
+          {/* Background */}
+          <View style={styles.gameBg} />
 
-        {/* Overlays */}
-        {gameState === 'start' && (
-          <Overlay title="BRICK BREAKER" sub="Tap or drag to move" btnText="START" onPress={startGame} />
-        )}
-        {gameState === 'gameover' && (
-          <Overlay title="GAME OVER" sub={`Score: ${score}`} btnText="TRY AGAIN" onPress={startGame} />
-        )}
-        {gameState === 'levelComplete' && (
-          <Overlay title={`LEVEL ${level}`} sub="Get Ready!" btnText="NEXT LEVEL" onPress={startNextLevel} />
-        )}
-        {gameState === 'win' && (
-          <Overlay title="YOU WIN!" sub={`Final Score: ${score}`} btnText="PLAY AGAIN" onPress={startGame} />
-        )}
-      </View>
+          {/* HUD */}
+          <HUD lives={lives} score={score} level={level} />
+
+          {/* Bricks */}
+          {bricks.map((br) =>
+            br.alive ? <Brick key={br.id} x={br.x} y={br.y} /> : null
+          )}
+
+          {/* Paddle */}
+          <View style={[styles.paddle, { left: paddleX, top: PADDLE_Y }]}>
+            <View style={styles.paddleShine} />
+          </View>
+
+          {/* Ball */}
+          <View
+            style={[
+              styles.ball,
+              { left: ballPos.x - BALL_R, top: ballPos.y - BALL_R },
+            ]}
+          />
+
+          {/* Overlays */}
+          {gameState === 'start' && (
+            <Overlay title="BRICK BREAKER" sub="Tap to move paddle" btnText="START" onPress={startGame} />
+          )}
+          {gameState === 'gameover' && (
+            <Overlay title="GAME OVER" sub={`Score: ${score}`} btnText="TRY AGAIN" onPress={startGame} />
+          )}
+          {gameState === 'levelComplete' && (
+            <Overlay title={`LEVEL ${level}`} sub="Get Ready!" btnText="NEXT LEVEL" onPress={startNextLevel} />
+          )}
+          {gameState === 'win' && (
+            <Overlay title="YOU WIN!" sub={`Final Score: ${score}`} btnText="PLAY AGAIN" onPress={startGame} />
+          )}
+        </View>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -319,6 +327,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#1a1a2e',
   },
+  kav: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   gameArea: {
     position: 'relative',
     backgroundColor: '#0d0d1a',
@@ -340,7 +349,7 @@ const styles = StyleSheet.create({
   hudText: {
     color: '#666',
     fontSize: 11,
-    fontFamily: 'Courier New',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     letterSpacing: 1,
   },
   brick: {
@@ -364,14 +373,6 @@ const styles = StyleSheet.create({
     left: '50%',
     width: 1.5,
     height: '100%',
-  },
-  mortarV2: {
-    position: 'absolute',
-    top: 0,
-    left: '100%',
-    width: 1.5,
-    height: '100%',
-    marginLeft: -1.5,
   },
   brickHighlight: {
     position: 'absolute',
@@ -416,14 +417,14 @@ const styles = StyleSheet.create({
   overlayTitle: {
     fontSize: 30,
     color: '#ff6644',
-    fontFamily: 'Courier New',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     letterSpacing: 4,
     marginBottom: 8,
   },
   overlaySub: {
     fontSize: 14,
     color: '#888',
-    fontFamily: 'Courier New',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     marginBottom: 24,
   },
   overlayBtnWrap: {
@@ -435,7 +436,7 @@ const styles = StyleSheet.create({
   overlayBtn: {
     fontSize: 16,
     color: '#fff',
-    fontFamily: 'Courier New',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     letterSpacing: 2,
     fontWeight: 'bold',
   },
